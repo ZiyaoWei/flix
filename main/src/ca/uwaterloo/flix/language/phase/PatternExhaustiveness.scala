@@ -86,7 +86,7 @@ object PatternExhaustiveness {
 
     case object Vector extends TyCon
 
-    case class Enum(name: String, sym: EnumSym, numArgs: Int, args: List[TyCon]) extends TyCon
+    case class Enum(name: String, sym: EnumSym, args: List[TyCon]) extends TyCon
 
   }
 
@@ -410,7 +410,7 @@ object PatternExhaustiveness {
       // If it's not our constructor, we ignore it
       case TypedAst.Pattern.Tag(Ast.CaseSymUse(sym, _), exp, _, _) =>
         ctor match {
-          case TyCon.Enum(name, _, _, _) =>
+          case TyCon.Enum(name, _, _) =>
             if (sym.name == name) {
               exp match {
                 // The expression varies depending on how many arguments it has, 0 arguments => unit, non zero
@@ -533,8 +533,8 @@ object PatternExhaustiveness {
 
       // For Enums, we have to figure out what base enum is, then look it up in the enum definitions to get the
       // other enums
-      case TyCon.Enum(_, sym, _, _) => {
-        root.enums.get(sym).get.cases.map(x => TyCon.Enum(x._1.name, sym, countTypeArgs(x._2.tpe), List.empty[TyCon]))
+      case TyCon.Enum(_, sym, _) => {
+        root.enums.get(sym).get.cases.map(x => TyCon.Enum(x._1.name, sym, List.empty[TyCon]))
       }.toList ::: xs
 
       /* For numeric types, we consider them as "infinite" types union
@@ -578,46 +578,7 @@ object PatternExhaustiveness {
     case TyCon.Tuple(args) => args.size
     case TyCon.Array => 0
     case TyCon.Vector => 0
-    case TyCon.Enum(_, _, numArgs, _) => numArgs
-  }
-
-  /**
-    * @param tpe the type to count
-    * @return the number of arguments a type constructor expects
-    */
-  // TODO: Maybe we can use the kind instead?
-  private def countTypeArgs(tpe: Type): Int = tpe.typeConstructor match {
-    case None => 0
-    case Some(TypeConstructor.Unit) => 0
-    case Some(TypeConstructor.Bool) => 0
-    case Some(TypeConstructor.Char) => 0
-    case Some(TypeConstructor.Float32) => 0
-    case Some(TypeConstructor.Float64) => 0
-    case Some(TypeConstructor.BigDecimal) => 0
-    case Some(TypeConstructor.Int8) => 0
-    case Some(TypeConstructor.Int16) => 0
-    case Some(TypeConstructor.Int32) => 0
-    case Some(TypeConstructor.Int64) => 0
-    case Some(TypeConstructor.BigInt) => 0
-    case Some(TypeConstructor.Str) => 0
-    case Some(TypeConstructor.Regex) => 0
-    case Some(TypeConstructor.Relation) => 0
-    case Some(TypeConstructor.Lattice) => 0
-    case Some(TypeConstructor.RecordRowEmpty) => 0
-    case Some(TypeConstructor.SchemaRowEmpty) => 0
-    case Some(TypeConstructor.Record) => 0
-    case Some(TypeConstructor.Schema) => 0
-    case Some(TypeConstructor.Arrow(length)) => length
-    case Some(TypeConstructor.Array) => 1
-    case Some(TypeConstructor.Vector) => 1
-    case Some(TypeConstructor.Ref) => 0
-    case Some(TypeConstructor.Lazy) => 1
-    case Some(TypeConstructor.Enum(sym, kind)) => 0 // TODO: Correct?
-    case Some(TypeConstructor.Native(clazz)) => 0
-    case Some(TypeConstructor.Tuple(l)) => l
-    case Some(TypeConstructor.RecordRowExtend(_)) => 2
-    case Some(TypeConstructor.SchemaRowExtend(_)) => 2
-    case _ => throw InternalCompilerException(s"Unexpected type: '$tpe'.", tpe.loc)
+    case TyCon.Enum(_, _, args) => args.size
   }
 
   /**
@@ -645,7 +606,7 @@ object PatternExhaustiveness {
     case TyCon.Tuple(args) => "(" + args.foldRight("")((x, xs) => if (xs == "") prettyPrintCtor(x) + xs else prettyPrintCtor(x) + ", " + xs) + ")"
     case TyCon.Array => "Array"
     case TyCon.Vector => "Vector"
-    case TyCon.Enum(name, _, num_args, args) => if (num_args == 0) name else name + prettyPrintCtor(TyCon.Tuple(args))
+    case TyCon.Enum(name, _, args) => if (args.isEmpty) name else name + prettyPrintCtor(TyCon.Tuple(args))
   }
 
 
@@ -658,7 +619,7 @@ object PatternExhaustiveness {
     */
   private def sameCtor(c1: TyCon, c2: TyCon): Boolean = (c1, c2) match {
     // Two enums are the same constructor if they have the same name and enum sym
-    case (TyCon.Enum(n1, s1, _, _), TyCon.Enum(n2, s2, _, _)) => n1 == n2 && s1 == s2
+    case (TyCon.Enum(n1, s1, _), TyCon.Enum(n2, s2, _)) => n1 == n2 && s1 == s2
     // Everything else is the same constructor if they are the same type
     case (a: TyCon.Tuple, b: TyCon.Tuple) => true
     case (a, b) => a == b;
@@ -689,12 +650,12 @@ object PatternExhaustiveness {
     case Pattern.Cst(Ast.Constant.Regex(_), _, _) => throw InternalCompilerException("unexpected regex pattern", pattern.loc)
     case Pattern.Cst(Ast.Constant.Null, _, _) => throw InternalCompilerException("unexpected null pattern", pattern.loc)
     case Pattern.Tag(Ast.CaseSymUse(sym, _), pat, _, _) => {
-      val (args, numArgs) = pat match {
-        case Pattern.Cst(Ast.Constant.Unit, _, _) => (List.empty[TyCon], 0)
-        case Pattern.Tuple(elms, _, _) => (elms.map(patToCtor), elms.length)
-        case a => (List(patToCtor(a)), 1)
+      val args = pat match {
+        case Pattern.Cst(Ast.Constant.Unit, _, _) => List.empty[TyCon]
+        case Pattern.Tuple(elms, _, _) => elms.map(patToCtor)
+        case a => List(patToCtor(a))
       }
-      TyCon.Enum(sym.name, sym.enumSym, numArgs, args)
+      TyCon.Enum(sym.name, sym.enumSym, args)
     }
     case Pattern.Tuple(elms, _, _) => TyCon.Tuple(elms.map(patToCtor))
   }
@@ -710,12 +671,15 @@ object PatternExhaustiveness {
     */
   private def rebuildPattern(tc: TyCon, lst: List[TyCon]): List[TyCon] = tc match {
     case TyCon.Tuple(args) => TyCon.Tuple(lst.take(args.size)) :: lst.drop(args.size)
-    case TyCon.Enum(name, sym, numArgs, _) => TyCon.Enum(name, sym, numArgs,
-      if (numArgs > lst.size) {
-        lst.take(lst.size) ::: List.fill(numArgs)(TyCon.Wild)
-      } else {
-        lst.take(numArgs)
-      }) :: lst.drop(numArgs)
+    case TyCon.Enum(name, sym, args) => {
+      val numArgs = args.size
+      TyCon.Enum(name, sym,
+        if (numArgs > lst.size) {
+          lst.take(lst.size) ::: List.fill(numArgs)(TyCon.Wild)
+        } else {
+          lst.take(numArgs)
+        }) :: lst.drop(numArgs)
+    }
     case a => a :: lst
   }
 
